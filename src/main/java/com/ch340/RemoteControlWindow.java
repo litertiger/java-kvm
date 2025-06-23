@@ -48,6 +48,10 @@ public class RemoteControlWindow extends JFrame {
     private CH9329Serial serial = new CH9329Serial();
     public MouseCommander mouse = new MouseCommander(serial);
     public  KeyboardCommander key = new KeyboardCommander(serial);
+    // 串口选择下拉框
+    private JComboBox<String> serialPortList;
+    // 串口连接状态
+    private boolean isSerialConnected = false;
 
     public RemoteControlWindow() {
         setTitle("远程控制窗口");
@@ -67,9 +71,19 @@ public class RemoteControlWindow extends JFrame {
         JButton showButton = new JButton("显示视频");
         JButton toggleLogButton = new JButton("隐藏日志");
         JButton fullScreenButton = new JButton("全屏显示");
+        
+        // 创建串口选择组件
+        serialPortList = new JComboBox<>();
+        JButton connectSerialButton = new JButton("连接串口");
+        JButton refreshSerialButton = new JButton("刷新串口");
+        
         controlPanel.add(new JLabel("选择摄像头:"));
         controlPanel.add(webcamList);
         controlPanel.add(showButton);
+        controlPanel.add(new JLabel("选择串口:"));
+        controlPanel.add(serialPortList);
+        controlPanel.add(connectSerialButton);
+        controlPanel.add(refreshSerialButton);
         controlPanel.add(toggleLogButton);
         controlPanel.add(fullScreenButton);
 
@@ -177,6 +191,9 @@ public class RemoteControlWindow extends JFrame {
 
         // 初始化摄像头列表
         updateWebcamList();
+        
+        // 初始化串口列表
+        updateSerialPortList();
 
         // 添加显示按钮事件监听器
         showButton.addActionListener(e -> {
@@ -184,6 +201,21 @@ public class RemoteControlWindow extends JFrame {
                 stopVideo();
                 startVideo();
             }
+        });
+        
+        // 添加串口连接按钮事件监听器
+        connectSerialButton.addActionListener(e -> {
+            if (serialPortList.getSelectedItem() != null) {
+                connectSerialPort();
+            } else {
+                JOptionPane.showMessageDialog(this, "请先选择串口");
+            }
+        });
+
+        // 添加刷新串口按钮事件监听器
+        refreshSerialButton.addActionListener(e -> {
+            updateSerialPortList();
+            logEvent("已刷新串口列表");
         });
 
         // 添加鼠标事件监听器
@@ -193,10 +225,14 @@ public class RemoteControlWindow extends JFrame {
                 Point convertedPoint = convertToTargetCoordinates(e.getPoint());
                 String buttonName = getMouseButtonName(e.getButton());
                 logEvent(String.format("鼠标按下: %s", buttonName), convertedPoint.x, convertedPoint.y);
-                try {
-                    mouse.AbsClickMouse(buttonName, convertedPoint.x, convertedPoint.y);
-                } catch (Exception ex) {
-                    logEvent("鼠标按下失败: " + ex.getMessage());
+                if (isSerialConnected) {
+                    try {
+                        mouse.AbsClickMouse(buttonName, convertedPoint.x, convertedPoint.y);
+                    } catch (Exception ex) {
+                        logEvent("鼠标按下失败: " + ex.getMessage());
+                    }
+                } else {
+                    logEvent("串口未连接，无法发送鼠标命令");
                 }
             }
 
@@ -205,10 +241,14 @@ public class RemoteControlWindow extends JFrame {
                 Point convertedPoint = convertToTargetCoordinates(e.getPoint());
                 String buttonName = getMouseButtonName(e.getButton());
                 logEvent(String.format("鼠标释放: %s", buttonName), convertedPoint.x, convertedPoint.y);
-                try {
-                    mouse.AbsReleaseMouse(buttonName, convertedPoint.x, convertedPoint.y);
-                } catch (Exception ex) {
-                    logEvent("鼠标释放失败: " + ex.getMessage());
+                if (isSerialConnected) {
+                    try {
+                        mouse.AbsReleaseMouse(buttonName, convertedPoint.x, convertedPoint.y);
+                    } catch (Exception ex) {
+                        logEvent("鼠标释放失败: " + ex.getMessage());
+                    }
+                } else {
+                    logEvent("串口未连接，无法发送鼠标命令");
                 }
             }
 
@@ -236,6 +276,15 @@ public class RemoteControlWindow extends JFrame {
                 String direction = notches < 0 ? "向上" : "向下";
                 logEvent(String.format("鼠标滚轮: %s滚动 %d 单位", direction, Math.abs(notches)), 
                     convertedPoint.x, convertedPoint.y);
+                if (isSerialConnected) {
+                    try {
+                        mouse.MouseWheel(notches,convertedPoint.x,convertedPoint.y);
+                    } catch (Exception ex) {
+                        logEvent("鼠标滚轮失败: " + ex.getMessage());
+                    }
+                } else {
+                    logEvent("串口未连接，无法发送鼠标滚轮命令");
+                }
             }
         });
 
@@ -251,10 +300,14 @@ public class RemoteControlWindow extends JFrame {
                 lastMousePosition = e.getPoint();
                 Point convertedPoint = convertToTargetCoordinates(e.getPoint());
                 logEvent("鼠标移动", convertedPoint.x, convertedPoint.y);
-                try {
-                    mouse.AbsMoveMouse(convertedPoint.x, convertedPoint.y);
-                } catch (Exception ex) {
-                    logEvent("鼠标移动失败: " + ex.getMessage());
+                if (isSerialConnected) {
+                    try {
+                        mouse.AbsMoveMouse(convertedPoint.x, convertedPoint.y);
+                    } catch (Exception ex) {
+                        logEvent("鼠标移动失败: " + ex.getMessage());
+                    }
+                } else {
+                    logEvent("串口未连接，无法发送鼠标命令");
                 }
             }
 
@@ -287,6 +340,9 @@ public class RemoteControlWindow extends JFrame {
             @Override
             public void windowClosing(WindowEvent e) {
                 stopVideo();
+                if (serial != null) {
+                    serial.closePort();
+                }
             }
         });
 
@@ -323,19 +379,27 @@ public class RemoteControlWindow extends JFrame {
                         int keyCode = keyEvent.getKeyCode();
                         String keyName = getKeyName(keyCode);
                         logEvent(String.format("按键按下: %s (代码: %d)", keyName, keyCode));
-                        try {
-                            key.pressKey(keyName);
-                        } catch (Exception ex) {
-                            logEvent("按键按下失败: " + ex.getMessage());
+                        if (isSerialConnected) {
+                            try {
+                                key.pressKey(keyName);
+                            } catch (Exception ex) {
+                                logEvent("按键按下失败: " + ex.getMessage());
+                            }
+                        } else {
+                            logEvent("串口未连接，无法发送键盘命令");
                         }
                     }else if (keyEvent.getID() == KeyEvent.KEY_RELEASED) {
                         int keyCode = keyEvent.getKeyCode();
                         String keyName = getKeyName(keyCode);
                         logEvent(String.format("按键释放: %s (代码: %d)", keyName, keyCode));
-                        try {
-                            key.releaseKey(keyName);
-                        } catch (Exception ex) {
-                            logEvent("按键释放失败: " + ex.getMessage());
+                        if (isSerialConnected) {
+                            try {
+                                key.releaseKey(keyName);
+                            } catch (Exception ex) {
+                                logEvent("按键释放失败: " + ex.getMessage());
+                            }
+                        } else {
+                            logEvent("串口未连接，无法发送键盘命令");
                         }
                     }
                 }
@@ -396,6 +460,47 @@ public class RemoteControlWindow extends JFrame {
         List<Webcam> webcams = Webcam.getWebcams();
         for (Webcam w : webcams) {
             webcamList.addItem(w.getName());
+        }
+    }
+
+    /**
+     * 更新串口列表
+     */
+    private void updateSerialPortList() {
+        serialPortList.removeAllItems();
+        List<String> ports = CH9329Serial.getAvailablePorts();
+        for (String port : ports) {
+            serialPortList.addItem(port);
+        }
+        if (ports.isEmpty()) {
+            serialPortList.addItem("无可用串口");
+        }
+    }
+
+    /**
+     * 连接选中的串口
+     */
+    private void connectSerialPort() {
+        String selectedPort = (String) serialPortList.getSelectedItem();
+        if (selectedPort == null || selectedPort.equals("无可用串口")) {
+            JOptionPane.showMessageDialog(this, "请选择有效的串口");
+            return;
+        }
+
+        try {
+            if (serial.initializeSerialPort(selectedPort)) {
+                isSerialConnected = true;
+                logEvent("串口连接成功: " + selectedPort);
+                JOptionPane.showMessageDialog(this, "串口连接成功: " + selectedPort);
+            } else {
+                isSerialConnected = false;
+                logEvent("串口连接失败: " + selectedPort);
+                JOptionPane.showMessageDialog(this, "串口连接失败: " + selectedPort);
+            }
+        } catch (Exception e) {
+            isSerialConnected = false;
+            logEvent("串口连接异常: " + e.getMessage());
+            JOptionPane.showMessageDialog(this, "串口连接异常: " + e.getMessage());
         }
     }
 
