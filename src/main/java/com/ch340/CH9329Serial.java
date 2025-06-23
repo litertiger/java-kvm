@@ -5,16 +5,84 @@ import javax.swing.*;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.HashMap;
+import java.util.List;
+import java.util.ArrayList;
 
 public class CH9329Serial {
     private SerialPort serialPort;
 
-   
-
-    
-
     public CH9329Serial() {
-        initializeSerialPort();
+        // 默认构造函数，不自动初始化串口
+    }
+
+    public CH9329Serial(String portName) {
+        initializeSerialPort(portName);
+    }
+
+    /**
+     * 获取所有可用的串口列表
+     * @return 串口名称列表
+     */
+    public static List<String> getAvailablePorts() {
+        List<String> portNames = new ArrayList<>();
+        SerialPort[] ports = SerialPort.getCommPorts();
+        for (SerialPort port : ports) {
+            portNames.add(port.getSystemPortName());
+        }
+        return portNames;
+    }
+
+    /**
+     * 根据串口名称初始化串口
+     * @param portName 串口名称
+     * @return 是否成功初始化
+     */
+    public boolean initializeSerialPort(String portName) {
+        if (serialPort != null && serialPort.isOpen()) {
+            serialPort.closePort();
+        }
+
+        SerialPort[] ports = SerialPort.getCommPorts();
+        for (SerialPort port : ports) {
+            if (port.getSystemPortName().equals(portName)) {
+                serialPort = port;
+                break;
+            }
+        }
+
+        if (serialPort == null) {
+            JOptionPane.showMessageDialog(null, "未找到指定的串口：" + portName);
+            return false;
+        }
+
+        serialPort.setBaudRate(9600);
+        serialPort.setNumDataBits(8);
+        serialPort.setNumStopBits(1);
+        serialPort.setParity(SerialPort.NO_PARITY);
+
+        if (!serialPort.openPort()) {
+            JOptionPane.showMessageDialog(null, "无法打开串口：" + serialPort.getSystemPortName());
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * 检查串口是否已连接
+     * @return 是否已连接
+     */
+    public boolean isConnected() {
+        return serialPort != null && serialPort.isOpen();
+    }
+
+    /**
+     * 关闭串口连接
+     */
+    public void closePort() {
+        if (serialPort != null && serialPort.isOpen()) {
+            serialPort.closePort();
+        }
     }
 
     private void initializeSerialPort() {
@@ -36,6 +104,10 @@ public class CH9329Serial {
 
     // 发送数据包并自动读取回响应
     public synchronized void sendPacket(byte[] packet) throws Exception {
+        if (serialPort == null || !serialPort.isOpen()) {
+            throw new Exception("串口未连接");
+        }
+        
         serialPort.writeBytes(packet, packet.length);
 
         // 回读应答（可按协议自行调整）
@@ -86,7 +158,6 @@ class KeyboardCommander {
             KEYCODE_MAP.put(c+"", (byte)(0x04 + (c - 'A')));
         }
         KEYCODE_MAP.put("Enter", (byte)0x58);
-      
         KEYCODE_MAP.put("Delete", (byte)0x4C);
         KEYCODE_MAP.put("Escape", (byte)0x29);
         KEYCODE_MAP.put("Tab", (byte)0x2B);
@@ -120,14 +191,14 @@ class KeyboardCommander {
         KEYCODE_MAP.put("Backspace", (byte)0x2A);
 
         KEYCODE_MAP.put("Insert", (byte)0x49);
-        KEYCODE_MAP.put("Home", (byte)0x5F);
+        KEYCODE_MAP.put("Home", (byte)0x4A);
         KEYCODE_MAP.put("End", (byte)0x4D);
         KEYCODE_MAP.put("PageUp", (byte)0x4B);
         KEYCODE_MAP.put("PageDown", (byte)0x4E);
-        KEYCODE_MAP.put("Up", (byte)0x60);
-        KEYCODE_MAP.put("Down", (byte)0x5A);
-        KEYCODE_MAP.put("←", (byte)0x5C);
-        KEYCODE_MAP.put("→", (byte)0x5E);
+        KEYCODE_MAP.put("Up", (byte)0x50);
+        KEYCODE_MAP.put("Down", (byte)0x51);
+        KEYCODE_MAP.put("←", (byte)0x50);
+        KEYCODE_MAP.put("→", (byte)0x4F);
 
 
         KEYCODE_MAP.put(",", (byte)0x36);
@@ -141,14 +212,7 @@ class KeyboardCommander {
 
         KEYCODE_MAP.put("[", (byte)0x2F);
         KEYCODE_MAP.put("]", (byte)0x30);
-         KEYCODE_MAP.put("\\", (byte)0x31);
-      
-
-        
-
-
-
-        
+        KEYCODE_MAP.put("\\", (byte)0x31);
         
 
 
@@ -315,6 +379,29 @@ class MouseCommander {
         data[4] = (byte) y1;//y 轴不动 
         data[5] = (byte) y2;//y 轴不动
         data[6] = 0x00 ;//齿轮不滚动
+        serial.sendPacket(CH9329Serial.buildPacket(CH9329Cmd.ABS_MOVE_MOUSE_CMD, data));
+    }
+    // 鼠标滚轮
+    public void MouseWheel(int notches,int x,int y) throws Exception {
+        byte[] data = new byte[7];
+        data[0] = 0x02;//这个必须是02
+        data[1] = 0x00;//01 是 左 ，02 是 右 ，04 是 中,00 表示释放，或者未按下
+        int newx=(x*4096)/1920;
+        int newy=(y*4096)/1080;
+        int x1=newx&0xFF;
+        int x2=(newx>>8)&0xFF;
+        int y1=newy&0xFF;
+        int y2=(newy>>8)&0xFF;
+        data[2] = (byte) x1;//x 轴不动
+        data[3] = (byte) x2;//x 轴不动
+        data[4] = (byte) y1;//y 轴不动 
+        data[5] = (byte) y2;//y 轴不动
+        data[6] = 0x00 ;//齿轮不滚动
+        if(notches>0){
+            data[6] = (byte) 0xFF;//齿轮向下
+        }else{
+            data[6] = 0x01;//齿轮向上
+        }
         serial.sendPacket(CH9329Serial.buildPacket(CH9329Cmd.ABS_MOVE_MOUSE_CMD, data));
     }
     
